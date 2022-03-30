@@ -115,7 +115,7 @@ class RollingLimit {
           limit:      this.limit,
           remaining:  res[0],
           rejected:   Boolean(res[1]),
-          timeoutDelta: res[2],
+          retryDelta: res[2],
           forced:     Boolean(res[3])
         };
       });
@@ -130,7 +130,7 @@ class RollingLimit {
       remaining: max,
       rejected: false,
       forced: true,
-      timeoutDelta: 0
+      retryDelta: 0
     };
   }
 }
