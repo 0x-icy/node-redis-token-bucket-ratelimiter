@@ -97,7 +97,7 @@ class RollingLimit {
         this.limit,       // ARGV[1]
         this.interval,    // ARGV[2]
         amount,           // ARGV[3]
-        this.force        // ARGV[4]
+        this.force,       // ARGV[4]
         this.timeout      // ARGV[5]
       ];
 
