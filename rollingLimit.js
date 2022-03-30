@@ -25,10 +25,17 @@ class RollingLimit {
     if (options.prefix && typeof options.prefix !== 'string') {
       throw new TypeError('prefix must be a string');
     }
+    if (options.timeout && typeof options.timeout !== 'number') {
+      throw new TypeError('timeout must be a number');
+    }
+    if (options.timeout < options.interval) {
+      throw new TypeError('timeout must be > interval');
+    }
 
     this.interval = options.interval;
     this.limit = options.limit;
     this.redis = options.redis;
+    this.timeout = options.timeout || 0;
     this.prefix = options.prefix || 'limit:';
     if(!/:$/.test(this.prefix)) this.prefix += ':';
     this.force = options.force ? 'true' : 'false';
@@ -45,6 +52,16 @@ class RollingLimit {
     }
   }
 
+  getKeysForId(id) {
+    const keyBase = `${this.prefix}{${id}}`;
+
+    return {
+      timestampKey: `${keyBase}:T`,
+      valueKey: `${keyBase}:V`,
+      waitKey: `${keyBase}:W`,
+    };
+  }
+
   use(id, amount){
     return Promise.resolve()
     .then(() => {
@@ -53,9 +70,11 @@ class RollingLimit {
       if (amount > this.limit) throw new Error(`amount must be < limit (${this.limit})`);
 
       // Note extra curly braces (hash tag) which are needed for Cluster hash slotting
-      const keyBase = `${this.prefix}{${id}}`;
-      const valueKey = `${keyBase}:V`;
-      const timestampKey = `${keyBase}:T`;
+      const {
+        timestampKey,
+        valueKey,
+        waitKey,
+       } = this.getKeysForId(id);
 
       // A note on redis EVAL:
       // It may seem nosensical for us to specify keys separate from args, but this is a way of letting
@@ -71,13 +90,15 @@ class RollingLimit {
       // https://redis.io/commands/eval
       //
       const redisKeysAndArgs = [
-        2,                // We're sending 2 KEYs
+        3,                // We're sending 2 KEYs
         valueKey,         // KEYS[1]
         timestampKey,     // KEYS[2]
+        waitKey,          // KEYS[3]
         this.limit,       // ARGV[1]
         this.interval,    // ARGV[2]
         amount,           // ARGV[3]
         this.force        // ARGV[4]
+        this.timeout      // ARGV[5]
       ];
 
       return this.redis.evalshaAsync(luaScript.sha1, ...redisKeysAndArgs)
@@ -94,7 +115,7 @@ class RollingLimit {
           limit:      this.limit,
           remaining:  res[0],
           rejected:   Boolean(res[1]),
-          retryDelta: res[2],
+          timeoutDelta: res[2],
           forced:     Boolean(res[3])
         };
       });
@@ -109,7 +130,7 @@ class RollingLimit {
       remaining: max,
       rejected: false,
       forced: true,
-      retryDelta: 0
+      timeoutDelta: 0
     };
   }
 }

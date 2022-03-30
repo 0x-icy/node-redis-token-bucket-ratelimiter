@@ -1,10 +1,12 @@
 -- valueKey timestampKey | limit intervalMS nowMS [amount]
 local valueKey     = KEYS[1] -- "limit:1:V"
 local timestampKey = KEYS[2] -- "limit:1:T"
+local waitKey      = KEYS[3] -- "limit:1:W"
 local limit      = tonumber(ARGV[1])
 local intervalMS = tonumber(ARGV[2])
 local amount     = math.max(tonumber(ARGV[3]), 0)
 local force      = ARGV[4] == "true"
+local timeoutMS = math.max(tonumber(ARGV[5]), 0)
 
 local lastUpdateMS
 local prevTokens
@@ -14,9 +16,22 @@ redis.replicate_commands()
 
 local time = redis.call('TIME')
 local nowMS = math.floor((time[1] * 1000) + (time[2] / 1000))
+
+-- enforce timeouts if there is a prior penalty for going over the limit
+local waitStartMS = false
+local waitRemainingMS = 0
+if timeoutMS > 0 then
+   waitStartMS = redis.call('GET',waitKey)
+   waitStartMS = waitStartMS or 0
+   
+   waitRemainingMS = waitStartMS + timeoutMS - nowMS
+   if waitRemainingMS > 0 then
+      return { 0, true, waitRemainingMS, false }
+   end
+end
+
 local initialTokens = redis.call('GET',valueKey)
 local initialUpdateMS = false
-
 
 if initialTokens == false then
    -- If we found no record, we temporarily rewind the clock to refill
@@ -74,7 +89,6 @@ end
 -- rejected requests don't cost anything, we'll wait for a costly request to update our values
 -- forced requests show up here as !rejected, but with netTokens = 0 (drained)
 if rejected == false then
-
    redis.call('PSETEX',valueKey,intervalMS,netTokens)
 
    if addTokens > 0 or initialUpdateMS == false then
@@ -84,6 +98,10 @@ if rejected == false then
       -- we didn't fill any tokens, so just renew the timestamp so it survives with the value
       redis.call('PEXPIRE',timestampKey,intervalMS)
    end
+-- if rejected and timeoutMS, we penalize
+elseif timeoutMS > 0 then
+   redis.call('PSETEX',waitKey,timeoutMS,nowMS)
+   retryDelta = timeoutMS
 end
 
 return { netTokens, rejected, retryDelta, forced }
